@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+.DS_Store
+*.pyc
+data/
+*.zip
+outputs/combined_air_quality_raw.csv
+outputs/air_quality_clean.csv
+*.csv
+models/*.pkl
+*.pkl
