@@ -1,9 +1,12 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import joblib
 import plotly.express as px
 from pathlib import Path
+
+from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+import numpy as np
 
 st.set_page_config(
     page_title="Air Quality Prediction Studio",
@@ -12,7 +15,12 @@ st.set_page_config(
 )
 
 OUTPUT_DIR = Path("outputs")
-MODEL_DIR = Path("models")
+
+features = [
+    "PM10", "SO2", "NO2", "CO", "O3",
+    "TEMP", "PRES", "DEWP", "RAIN", "WSPM",
+    "season", "weekend", "hour_sin", "hour_cos"
+]
 
 @st.cache_data
 def load_data():
@@ -20,17 +28,38 @@ def load_data():
     return df
 
 @st.cache_resource
-def load_model():
-    return joblib.load(MODEL_DIR / "best_model.pkl")
+def train_model(df):
+    sample_df = df.sample(n=min(60000, len(df)), random_state=42)
+
+    X = sample_df[features]
+    y = sample_df["PM2.5"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+
+    model = ExtraTreesRegressor(
+        n_estimators=80,
+        max_depth=25,
+        min_samples_leaf=2,
+        random_state=42,
+        n_jobs=-1
+    )
+
+    model.fit(X_train, y_train)
+
+    preds = model.predict(X_test)
+
+    metrics = {
+        "R2": r2_score(y_test, preds),
+        "MAE": mean_absolute_error(y_test, preds),
+        "RMSE": np.sqrt(mean_squared_error(y_test, preds))
+    }
+
+    return model, metrics
 
 df = load_data()
-model = load_model()
-
-features = [
-    "PM10", "SO2", "NO2", "CO", "O3",
-    "TEMP", "PRES", "DEWP", "RAIN", "WSPM",
-    "season", "weekend", "hour_sin", "hour_cos"
-]
+model, live_metrics = train_model(df)
 
 st.title("🌫️ Air Quality Prediction Studio")
 st.markdown(
@@ -54,7 +83,7 @@ with tab1:
     c1.metric("Observations", f"{len(df):,}")
     c2.metric("Stations", df["station"].nunique())
     c3.metric("Target", "PM2.5")
-    c4.metric("Best Model", "Extra Trees")
+    c4.metric("Live Model", "Extra Trees")
 
     st.subheader("PM2.5 Distribution")
     fig = px.histogram(
@@ -79,11 +108,9 @@ with tab1:
 
 with tab2:
     st.subheader("Predict PM2.5 Concentration")
-
     st.write("Adjust the environmental variables below to estimate PM2.5 concentration.")
 
     user_inputs = {}
-
     col1, col2 = st.columns(2)
 
     for i, feature in enumerate(features):
@@ -93,16 +120,12 @@ with tab2:
         max_val = float(df[feature].max())
         mean_val = float(df[feature].mean())
 
-        if min_val == max_val:
-            active_col.write(f"{feature}: {min_val}")
-            user_inputs[feature] = min_val
-        else:
-            user_inputs[feature] = active_col.slider(
-                feature,
-                min_value=min_val,
-                max_value=max_val,
-                value=mean_val
-            )
+        user_inputs[feature] = active_col.slider(
+            feature,
+            min_value=min_val,
+            max_value=max_val,
+            value=mean_val
+        )
 
     input_df = pd.DataFrame([user_inputs])
     prediction = model.predict(input_df)[0]
@@ -126,11 +149,17 @@ with tab2:
     st.subheader(f"Air Quality Category: {category}")
 
 with tab3:
-    st.subheader("Model Comparison")
+    st.subheader("Model Results")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Live Model R²", f"{live_metrics['R2']:.3f}")
+    c2.metric("Live Model MAE", f"{live_metrics['MAE']:.2f}")
+    c3.metric("Live Model RMSE", f"{live_metrics['RMSE']:.2f}")
 
     comparison_path = OUTPUT_DIR / "model_comparison.csv"
 
     if comparison_path.exists():
+        st.subheader("Saved Model Comparison")
         results = pd.read_csv(comparison_path)
         st.dataframe(results, use_container_width=True)
 
@@ -149,25 +178,20 @@ with tab3:
             title="Model Comparison by RMSE"
         )
         st.plotly_chart(fig4, use_container_width=True)
-    else:
-        st.warning("Model comparison file not found. Run compare_models.py first.")
-
-    st.subheader("Feature Importance")
 
     importance_path = OUTPUT_DIR / "feature_importance.csv"
 
     if importance_path.exists():
+        st.subheader("Feature Importance")
         imp = pd.read_csv(importance_path)
         fig5 = px.bar(
             imp.sort_values("Importance"),
             x="Importance",
             y="Feature",
             orientation="h",
-            title="Random Forest Feature Importance"
+            title="Feature Importance"
         )
         st.plotly_chart(fig5, use_container_width=True)
-    else:
-        st.warning("Feature importance file not found.")
 
 with tab4:
     st.subheader("Cleaned Air Quality Dataset")
